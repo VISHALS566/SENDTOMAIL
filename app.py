@@ -44,12 +44,14 @@ def on_join(data):
 def send_via_brevo(data):
     target_email = data['target_email']
     text_content = data['text']
+    
+    SENDER_EMAIL = os.getenv("MAIL_SENDER")
 
-    print(f"Sending to {target_email} via Brevo Port 2525...")
+    print(f"Sending to {target_email} from {SENDER_EMAIL}...")
 
     try:
         msg = MIMEMultipart()
-        msg['From'] = os.getenv("MAIL_SENDER")
+        msg['From'] = SENDER_EMAIL
         msg['To'] = target_email
         msg['Subject'] = "Public PC Transfer"
 
@@ -61,11 +63,10 @@ def send_via_brevo(data):
         """
         msg.attach(MIMEText(body, 'html'))
 
-        # CONNECT TO BREVO ON PORT 2525
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
             server.login(SMTP_USER, SMTP_PASSWORD)
-            server.send_message(msg)
+            server.sendmail(SENDER_EMAIL, target_email, msg.as_string())
         
         emit('email_status', {'success': True})
     except Exception as e:
