@@ -34,14 +34,7 @@ def desktop_view():
 def mobile_view(session_id):
     return render_template_string(HTML_TEMPLATE, view_type="mobile", session_id=session_id)
 
-@app.route('/qrcode')
-def get_qrcode():
-    url = request.args.get('url')
-    img = qrcode.make(url)
-    buf = BytesIO()
-    img.save(buf)
-    buf.seek(0)
-    return app.response_class(buf.getvalue(), mimetype='image/png')
+
 
 @app.route('/api/mobile-unlock', methods=['POST'])
 def mobile_unlock():
@@ -131,8 +124,7 @@ HTML_TEMPLATE = """
         
         const base = "{{ base_url }}";
         const link = `${base}/mobile/${id}`;
-        document.getElementById('qr').src = `/qrcode?url=${encodeURIComponent(link)}`;
-
+        document.getElementById('qr').src = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(link)}`;
         socket.on('connect', () => socket.emit('join', { room: id }));
 
         let email = "";
