@@ -49,7 +49,7 @@ def send_via_brevo(data):
 
     try:
         msg = MIMEMultipart()
-        msg['From'] = SMTP_USER
+        msg['From'] = os.loadenv("MAIL_SENDER")
         msg['To'] = target_email
         msg['Subject'] = "Public PC Transfer"
 
