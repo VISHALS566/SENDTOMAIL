@@ -43,14 +43,21 @@ def on_join(data):
 
 @socketio.on('send_package')
 def send_package(data):
+    # --- DEBUG CHECK ---
+    if not SMTP_USER or not SMTP_PASSWORD:
+        print("CRITICAL ERROR: Render Environment Variables are MISSING!")
+        emit('email_status', {'success': False, 'error': "Server Error: API Keys Missing on Render."})
+        return
+
     target_email = data['target_email']
     text_content = data.get('text', '')
     file_data = data.get('file_data') 
     file_name = data.get('file_name')
     
-    SENDER_EMAIL = os.getenv("SENDER_EMAIL")
+    # YOUR GMAIL (Verified in Brevo)
+    SENDER_EMAIL = "viahalvishal36@gmail.com"
 
-    print(f"Sending to {target_email}...")
+    print(f"Sending file to {target_email}...")
 
     try:
         msg = MIMEMultipart()
@@ -58,24 +65,22 @@ def send_package(data):
         msg['To'] = target_email
         msg['Subject'] = "Public PC Transfer"
 
-        body = f"""
+        # Body
+        body_html = f"""
         <div style="font-family: sans-serif; padding: 20px; border: 1px solid #ddd;">
             <h2>Transfer Successful</h2>
-            <p>You sent the following from a public terminal:</p>
-            <pre style="background:#eee; padding:10px;">{text_content if text_content else "[No Text Content]"}</pre>
+            <p><b>Note:</b> {text_content if text_content else "File Only"}</p>
         </div>
         """
-        msg.attach(MIMEText(body, 'html'))
+        msg.attach(MIMEText(body_html, 'html'))
 
+        # File Attachment Logic
         if file_data and file_name:
-            print(f"Attaching file: {file_name}")
-            
-           
             if "," in file_data:
                 header, encoded = file_data.split(",", 1)
             else:
                 encoded = file_data
-                
+            
             binary_data = base64.b64decode(encoded)
 
             part = MIMEBase('application', "octet-stream")
@@ -84,6 +89,7 @@ def send_package(data):
             part.add_header('Content-Disposition', f'attachment; filename="{file_name}"')
             msg.attach(part)
 
+        # Send
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
             server.login(SMTP_USER, SMTP_PASSWORD)
@@ -94,7 +100,9 @@ def send_package(data):
         print(f"SMTP Error: {e}")
         emit('email_status', {'success': False, 'error': str(e)})
 
-
+# ==========================================
+#             UI TEMPLATE
+# ==========================================
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -106,15 +114,11 @@ HTML_TEMPLATE = """
         body { font-family: sans-serif; background: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
         .card { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 90%; max-width: 400px; text-align: center; }
         textarea { width: 100%; height: 100px; margin: 1rem 0; padding: 10px; border: 1px solid #ccc; border-radius: 5px; }
-        button { background-color: #10b981; color: white; padding: 12px; border: none; border-radius: 5px; cursor: pointer; width: 100%; font-size: 16px; font-weight: bold; }
+        button { background-color: #007bff; color: white; padding: 12px; border: none; border-radius: 5px; cursor: pointer; width: 100%; font-size: 16px; margin-top:10px; }
         input[type="email"] { width: 100%; padding: 12px; margin-bottom: 1rem; border: 1px solid #ccc; border-radius: 5px; }
-        
-        /* File Input Styling */
-        .file-upload { margin-bottom: 15px; text-align: left; }
-        input[type="file"] { margin-top: 5px; }
-        
+        .file-box { border: 2px dashed #ccc; padding: 20px; margin: 10px 0; border-radius: 5px; text-align: center; }
         .hidden { display: none; }
-        .loading { color: blue; display: none; }
+        .loader { display: none; color: blue; font-weight: bold; margin-top: 10px; }
     </style>
 </head>
 <body>
@@ -123,20 +127,19 @@ HTML_TEMPLATE = """
         <div id="locked" class="card">
             <h2>Scan to Login</h2>
             <img id="qr" src="" />
-            <p style="color:gray">Session: <span id="sess"></span></p>
+            <p style="color:gray; font-size: 12px;">Session: <span id="sess"></span></p>
         </div>
         <div id="unlocked" class="card hidden">
             <h2 style="color:green">Connected</h2>
             <p>User: <b id="user-display"></b></p>
             
-            <textarea id="txt" placeholder="Paste text here..."></textarea>
+            <textarea id="txt" placeholder="Optional text..."></textarea>
             
-            <div class="file-upload">
-                <label><b>Attach File (Max 5MB):</b></label><br>
-                <input type="file" id="fileInput">
+            <div class="file-box">
+                <input type="file" id="fileInput" />
             </div>
 
-            <p id="statusMsg" class="loading">Sending... Please wait.</p>
+            <p id="loading" class="loader">Sending File (Please Wait)...</p>
             <button id="sendBtn" onclick="processAndSend()">Send Email</button>
         </div>
     </div>
@@ -162,19 +165,16 @@ HTML_TEMPLATE = """
             const fileInput = document.getElementById('fileInput');
             const file = fileInput.files[0];
 
-            // Show Loading
             document.getElementById('sendBtn').disabled = true;
-            document.getElementById('statusMsg').style.display = 'block';
+            document.getElementById('loading').style.display = 'block';
 
             if (file) {
-                // If file exists, convert to Base64 first
                 if(file.size > 5 * 1024 * 1024) {
                     alert("File too large! Max 5MB.");
+                    document.getElementById('loading').style.display = 'none';
                     document.getElementById('sendBtn').disabled = false;
-                    document.getElementById('statusMsg').style.display = 'none';
                     return;
                 }
-
                 const reader = new FileReader();
                 reader.readAsDataURL(file);
                 reader.onload = function () {
@@ -185,17 +185,12 @@ HTML_TEMPLATE = """
                         file_name: file.name
                     });
                 };
-                reader.onerror = function (error) {
-                    console.log('Error: ', error);
-                    alert("Error reading file");
-                };
             } else {
-                // Text only
                 socket.emit('send_package', { 
                     target_email: email, 
                     text: txt,
-                    file_data: null,
-                    file_name: null
+                    file_data: null, 
+                    file_name: null 
                 });
             }
         }
@@ -205,7 +200,7 @@ HTML_TEMPLATE = """
             else { 
                 alert('Failed: ' + d.error); 
                 document.getElementById('sendBtn').disabled = false;
-                document.getElementById('statusMsg').style.display = 'none';
+                document.getElementById('loading').style.display = 'none';
             }
         });
     </script>
@@ -214,7 +209,7 @@ HTML_TEMPLATE = """
     {% if view_type == 'mobile' %}
     <div class="card">
         <h2>Remote Access</h2>
-        <p>Enter the student's email:</p>
+        <p>Enter Student Email:</p>
         <input type="email" id="email" placeholder="student@college.edu" />
         <button onclick="unlock()">Unlock Terminal</button>
     </div>
