@@ -1,10 +1,12 @@
 import os
 import smtplib
+import base64
 from flask import Flask, request, jsonify, render_template_string
 from flask_socketio import SocketIO, emit, join_room
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import qrcode
+from email.mime.base import MIMEBase
+from email import encoders
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,8 +14,7 @@ load_dotenv()
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
 
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
-
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent', max_http_buffer_size=5 * 1024 * 1024) 
 SMTP_USER = os.getenv("SMTP_EMAIL") 
 
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD") 
@@ -40,14 +41,16 @@ def mobile_unlock():
 def on_join(data):
     join_room(data['room'])
 
-@socketio.on('send_via_gmail')
-def send_via_brevo(data):
+@socketio.on('send_package')
+def send_package(data):
     target_email = data['target_email']
-    text_content = data['text']
+    text_content = data.get('text', '')
+    file_data = data.get('file_data') 
+    file_name = data.get('file_name')
     
-    SENDER_EMAIL = os.getenv("MAIL_SENDER")
+    SENDER_EMAIL = os.getenv("SENDER_EMAIL")
 
-    print(f"Sending to {target_email} from {SENDER_EMAIL}...")
+    print(f"Sending to {target_email}...")
 
     try:
         msg = MIMEMultipart()
@@ -58,10 +61,28 @@ def send_via_brevo(data):
         body = f"""
         <div style="font-family: sans-serif; padding: 20px; border: 1px solid #ddd;">
             <h2>Transfer Successful</h2>
-            <pre style="background:#eee; padding:10px;">{text_content}</pre>
+            <p>You sent the following from a public terminal:</p>
+            <pre style="background:#eee; padding:10px;">{text_content if text_content else "[No Text Content]"}</pre>
         </div>
         """
         msg.attach(MIMEText(body, 'html'))
+
+        if file_data and file_name:
+            print(f"Attaching file: {file_name}")
+            
+           
+            if "," in file_data:
+                header, encoded = file_data.split(",", 1)
+            else:
+                encoded = file_data
+                
+            binary_data = base64.b64decode(encoded)
+
+            part = MIMEBase('application', "octet-stream")
+            part.set_payload(binary_data)
+            encoders.encode_base64(part)
+            part.add_header('Content-Disposition', f'attachment; filename="{file_name}"')
+            msg.attach(part)
 
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
@@ -84,10 +105,16 @@ HTML_TEMPLATE = """
     <style>
         body { font-family: sans-serif; background: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
         .card { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); width: 90%; max-width: 400px; text-align: center; }
-        textarea { width: 100%; height: 150px; margin: 1rem 0; padding: 10px; border: 1px solid #ccc; border-radius: 5px; }
+        textarea { width: 100%; height: 100px; margin: 1rem 0; padding: 10px; border: 1px solid #ccc; border-radius: 5px; }
         button { background-color: #10b981; color: white; padding: 12px; border: none; border-radius: 5px; cursor: pointer; width: 100%; font-size: 16px; font-weight: bold; }
-        input { width: 100%; padding: 12px; margin-bottom: 1rem; border: 1px solid #ccc; border-radius: 5px; }
+        input[type="email"] { width: 100%; padding: 12px; margin-bottom: 1rem; border: 1px solid #ccc; border-radius: 5px; }
+        
+        /* File Input Styling */
+        .file-upload { margin-bottom: 15px; text-align: left; }
+        input[type="file"] { margin-top: 5px; }
+        
         .hidden { display: none; }
+        .loading { color: blue; display: none; }
     </style>
 </head>
 <body>
@@ -101,8 +128,16 @@ HTML_TEMPLATE = """
         <div id="unlocked" class="card hidden">
             <h2 style="color:green">Connected</h2>
             <p>User: <b id="user-display"></b></p>
+            
             <textarea id="txt" placeholder="Paste text here..."></textarea>
-            <button onclick="send()">Send via Brevo</button>
+            
+            <div class="file-upload">
+                <label><b>Attach File (Max 5MB):</b></label><br>
+                <input type="file" id="fileInput">
+            </div>
+
+            <p id="statusMsg" class="loading">Sending... Please wait.</p>
+            <button id="sendBtn" onclick="processAndSend()">Send Email</button>
         </div>
     </div>
     <script>
@@ -110,7 +145,6 @@ HTML_TEMPLATE = """
         const id = Math.random().toString(36).substring(2, 8);
         document.getElementById('sess').innerText = id;
         const link = `{{ base_url }}/mobile/${id}`;
-        // USE PUBLIC API FOR QR CODE (Fixes broken image)
         document.getElementById('qr').src = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(link)}`;
 
         socket.on('connect', () => socket.emit('join', { room: id }));
@@ -123,14 +157,56 @@ HTML_TEMPLATE = """
             document.getElementById('unlocked').classList.remove('hidden');
         });
 
-        function send() {
+        function processAndSend() {
             const txt = document.getElementById('txt').value;
-            socket.emit('send_via_gmail', { target_email: email, text: txt });
+            const fileInput = document.getElementById('fileInput');
+            const file = fileInput.files[0];
+
+            // Show Loading
+            document.getElementById('sendBtn').disabled = true;
+            document.getElementById('statusMsg').style.display = 'block';
+
+            if (file) {
+                // If file exists, convert to Base64 first
+                if(file.size > 5 * 1024 * 1024) {
+                    alert("File too large! Max 5MB.");
+                    document.getElementById('sendBtn').disabled = false;
+                    document.getElementById('statusMsg').style.display = 'none';
+                    return;
+                }
+
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = function () {
+                    socket.emit('send_package', { 
+                        target_email: email, 
+                        text: txt,
+                        file_data: reader.result,
+                        file_name: file.name
+                    });
+                };
+                reader.onerror = function (error) {
+                    console.log('Error: ', error);
+                    alert("Error reading file");
+                };
+            } else {
+                // Text only
+                socket.emit('send_package', { 
+                    target_email: email, 
+                    text: txt,
+                    file_data: null,
+                    file_name: null
+                });
+            }
         }
 
         socket.on('email_status', (d) => {
             if(d.success) { alert('Sent!'); location.reload(); }
-            else { alert('Failed: ' + d.error); }
+            else { 
+                alert('Failed: ' + d.error); 
+                document.getElementById('sendBtn').disabled = false;
+                document.getElementById('statusMsg').style.display = 'none';
+            }
         });
     </script>
     {% endif %}
@@ -161,3 +237,6 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
+
+if __name__ == '__main__':
+    socketio.run(app, debug=True, host='0.0.0.0', port=5000)
