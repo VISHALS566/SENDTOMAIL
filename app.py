@@ -43,7 +43,6 @@ def on_join(data):
 
 @socketio.on('send_package')
 def send_package(data):
-    # --- DEBUG CHECK ---
     if not SMTP_USER or not SMTP_PASSWORD:
         print("CRITICAL ERROR: Render Environment Variables are MISSING!")
         emit('email_status', {'success': False, 'error': "Server Error: API Keys Missing on Render."})
@@ -54,8 +53,7 @@ def send_package(data):
     file_data = data.get('file_data') 
     file_name = data.get('file_name')
     
-    # YOUR GMAIL (Verified in Brevo)
-    SENDER_EMAIL = "viahalvishal36@gmail.com"
+    SENDER_EMAIL = os.getenv("MAIL_SENDER")
 
     print(f"Sending file to {target_email}...")
 
@@ -65,7 +63,6 @@ def send_package(data):
         msg['To'] = target_email
         msg['Subject'] = "Public PC Transfer"
 
-        # Body
         body_html = f"""
         <div style="font-family: sans-serif; padding: 20px; border: 1px solid #ddd;">
             <h2>Transfer Successful</h2>
@@ -74,7 +71,6 @@ def send_package(data):
         """
         msg.attach(MIMEText(body_html, 'html'))
 
-        # File Attachment Logic
         if file_data and file_name:
             if "," in file_data:
                 header, encoded = file_data.split(",", 1)
@@ -89,7 +85,6 @@ def send_package(data):
             part.add_header('Content-Disposition', f'attachment; filename="{file_name}"')
             msg.attach(part)
 
-        # Send
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
             server.login(SMTP_USER, SMTP_PASSWORD)
@@ -100,9 +95,6 @@ def send_package(data):
         print(f"SMTP Error: {e}")
         emit('email_status', {'success': False, 'error': str(e)})
 
-# ==========================================
-#             UI TEMPLATE
-# ==========================================
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
